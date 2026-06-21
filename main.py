@@ -43,8 +43,8 @@ app.add_middleware(
 # ── Config from env ────────────────────────────────────────────────────────────
 
 PROXY_URI     = os.getenv("PROXY_URI", "")
-TB_COOKIES    = os.getenv("TB_COOKIES", "")
-API_KEY       = os.getenv("API_KEY", "")   # optional — leave blank to disable auth
+TB_COOKIES    = os.getenv("TB_COOKIES", "")   # fallback — can also be passed per-request
+API_KEY       = os.getenv("API_KEY", "")      # optional — leave blank to disable auth
 
 PROXIES = {"https": PROXY_URI, "http": PROXY_URI} if PROXY_URI else {}
 
@@ -59,10 +59,11 @@ HEADERS = {
 
 # ── Session (persistent across requests — keeps cookies alive) ─────────────────
 
-def build_session() -> cffi_requests.Session:
+def build_session(cookie_str: str = "") -> cffi_requests.Session:
     s = cffi_requests.Session(impersonate="chrome124")
-    if TB_COOKIES:
-        for part in TB_COOKIES.split(";"):
+    cookies = cookie_str or TB_COOKIES
+    if cookies:
+        for part in cookies.split(";"):
             part = part.strip()
             if "=" in part:
                 k, v = part.split("=", 1)
@@ -71,8 +72,11 @@ def build_session() -> cffi_requests.Session:
 
 _session: Optional[cffi_requests.Session] = None
 
-def get_session() -> cffi_requests.Session:
+def get_session(cookie_str: str = "") -> cffi_requests.Session:
     global _session
+    # If caller passes cookies, always build a fresh session with them
+    if cookie_str:
+        return build_session(cookie_str)
     if _session is None:
         _session = build_session()
     return _session
@@ -93,12 +97,12 @@ def empty_result(isbn: str, error: str = "") -> dict:
 
 # ── Core fetch logic ───────────────────────────────────────────────────────────
 
-def fetch_prices(isbns: list[str]) -> dict:
+def fetch_prices(isbns: list[str], cookie_str: str = "") -> dict:
     """
     Attempt 1: TB JSON API  (/tb-api/buyback/get-quotes/)
     Attempt 2: HTML scrape  (/buyback/?isbn=X)  — per book, slower
     """
-    s = get_session()
+    s = get_session(cookie_str)
     results = {}
 
     try:
@@ -235,20 +239,28 @@ def health():
 
 
 @app.get("/tb")
-def get_tb_price(isbn: str, x_api_key: Optional[str] = Header(default=None)):
+def get_tb_price(
+    isbn: str,
+    x_api_key: Optional[str] = Header(default=None),
+    x_tb_cookies: Optional[str] = Header(default=None),
+):
     """Single ISBN lookup. Returns {isbn, price, wants, accept, error}"""
     check_auth(x_api_key)
     isbn = clean_isbn(isbn)
     if len(isbn) not in (10, 13):
         raise HTTPException(400, "Invalid ISBN — must be 10 or 13 digits")
 
-    result = fetch_prices([isbn])
+    result = fetch_prices([isbn], cookie_str=x_tb_cookies or "")
     data = result.get(isbn, empty_result(isbn))
     return {"isbn": isbn, **data}
 
 
 @app.get("/tb/batch")
-def get_tb_prices_batch(isbns: str, x_api_key: Optional[str] = Header(default=None)):
+def get_tb_prices_batch(
+    isbns: str,
+    x_api_key: Optional[str] = Header(default=None),
+    x_tb_cookies: Optional[str] = Header(default=None),
+):
     """
     Batch lookup. ?isbns=ISBN1,ISBN2,ISBN3
     Returns {items: {isbn: {price, wants, accept, error}}}
@@ -259,5 +271,5 @@ def get_tb_prices_batch(isbns: str, x_api_key: Optional[str] = Header(default=No
     if not isbn_list:
         raise HTTPException(400, "No valid ISBNs provided")
 
-    results = fetch_prices(isbn_list)
+    results = fetch_prices(isbn_list, cookie_str=x_tb_cookies or "")
     return {"items": results, "count": len(results)}
