@@ -297,7 +297,7 @@ _ebay_session = None
 def get_ebay_session():
     global _ebay_session
     if _ebay_session is None:
-        s = cffi_requests.Session(impersonate="chrome131")
+        s = cffi_requests.Session(impersonate="chrome124")
         s.get("https://www.ebay.com/", headers={**EBAY_HEADERS, "sec-fetch-site": "none"}, timeout=15)
         _ebay_session = s
         log.info("eBay session warmed up")
